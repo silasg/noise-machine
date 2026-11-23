@@ -40,7 +40,7 @@ object ScheduleManager {
         entry: Settings.ScheduleEntry
     ) {
         val triggerMs = nextTriggerMs(entry) ?: return
-        val pi = pendingIntent(ctx, entry.id, autoStop = false)
+        val pi = requireNotNull(pendingIntent(ctx, entry.id, autoStop = false))
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && am.canScheduleExactAlarms() ||
                 Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
@@ -56,7 +56,7 @@ object ScheduleManager {
 
     fun scheduleAutoStop(ctx: Context, entryId: String, atMs: Long) {
         val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val pi = pendingIntent(ctx, entryId, autoStop = true)
+        val pi = requireNotNull(pendingIntent(ctx, entryId, autoStop = true))
         try {
             am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, atMs, pi)
         } catch (t: Throwable) {
