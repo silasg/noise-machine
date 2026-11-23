@@ -1,5 +1,10 @@
 "use strict";
 
+// Explicit local-app opt-in; ordinary browser clients keep the full visuals.
+if (new URLSearchParams(window.location.search).get("lightweight") === "1") {
+  document.documentElement.classList.add("lightweight");
+}
+
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
@@ -13,6 +18,48 @@ let commandRefreshTimer = null;
 let interactingControl = null;
 let evtSrc = null;
 let scheduleNextTimer = null;
+let visibleTab = "pad";
+const voiceVolumes = new Map();
+
+function queueVoiceVolume(id, volume) {
+  let pending = voiceVolumes.get(id);
+  if (!pending) {
+    pending = { value: null, timer: null, request: null, lastSent: 0, cancelled: false };
+    voiceVolumes.set(id, pending);
+  }
+  if (pending.cancelled) return;
+  pending.value = volume;
+  if (!pending.timer && !pending.request) {
+    pending.timer = setTimeout(() => flushVoiceVolume(id), Math.max(0, 100 - (Date.now() - pending.lastSent)));
+  }
+}
+
+function flushVoiceVolume(id) {
+  const pending = voiceVolumes.get(id);
+  if (!pending) return;
+  clearTimeout(pending.timer);
+  pending.timer = null;
+  if (pending.cancelled || pending.request || pending.value === null) return;
+  const volume = pending.value;
+  pending.value = null;
+  pending.lastSent = Date.now();
+  pending.request = api("/api/voice/volume", { id, volume }).catch(console.warn).then(() => {
+    pending.request = null;
+    if (!pending.cancelled && pending.value !== null) queueVoiceVolume(id, pending.value);
+  });
+}
+
+function cancelVoiceVolume(id) {
+  const pending = voiceVolumes.get(id);
+  if (!pending) return Promise.resolve();
+  pending.cancelled = true;
+  clearTimeout(pending.timer);
+  pending.value = null;
+  // Serialize deactivation after any already-sent volume command.
+  return Promise.resolve(pending.request).then(() => {
+    if (voiceVolumes.get(id) === pending) voiceVolumes.delete(id);
+  });
+}
 
 // ---------- networking ----------
 
@@ -81,19 +128,27 @@ async function refresh() {
 function render() {
   if (!state) return;
   renderStatus();
-  renderSection("pad", [state.catalog, state.activeVoices], ["#pad-grid"], renderPad);
-  renderSection("master", state.masterVolume, ["#master-volume"], renderMaster);
-  renderSection("scenes", [state.scenes, state.catalog], ["#scene-list"], renderScenes);
-  renderSection("scene-options", (state.scenes || []).map(sc => sc.name),
-    ["#sched-scene"], renderSceneOptions);
-  const schedule = (state.schedule || []).map(entry => {
-    const copy = Object.assign({}, entry);
-    delete copy.nextTriggerMs;
-    return copy;
+  const active = activeMap();
+  voiceVolumes.forEach((pending, id) => {
+    if (!active.has(id)) cancelVoiceVolume(id);
   });
-  renderSection("schedule", schedule, ["#schedule-list"], renderSchedule);
-  renderSection("library", state.catalog, ["#library-list"], renderLibrary);
-  renderSection("settings", [state.settings, state.systemVolumeTarget],
+  if (visibleTab === "pad") {
+    renderSection("pad", [state.catalog, state.activeVoices], ["#pad-grid"], renderPad);
+    renderSection("master", state.masterVolume, ["#master-volume"], renderMaster);
+  }
+  if (visibleTab === "scenes") renderSection("scenes", [state.scenes, state.catalog], ["#scene-list"], renderScenes);
+  if (visibleTab === "schedule") {
+    renderSection("scene-options", (state.scenes || []).map(sc => sc.name),
+      ["#sched-scene"], renderSceneOptions);
+    const schedule = (state.schedule || []).map(entry => {
+      const copy = Object.assign({}, entry);
+      delete copy.nextTriggerMs;
+      return copy;
+    });
+    renderSection("schedule", schedule, ["#schedule-list"], renderSchedule);
+  }
+  if (visibleTab === "library") renderSection("library", state.catalog, ["#library-list"], renderLibrary);
+  if (visibleTab === "settings") renderSection("settings", [state.settings, state.systemVolumeTarget],
     ["#pane-settings"], renderSettings);
 }
 
@@ -196,8 +251,10 @@ function makePad(sound, active) {
   slider.addEventListener("click", e => e.stopPropagation());
   slider.addEventListener("input", () => {
     const v = parseInt(slider.value, 10) / 100;
-    api("/api/voice/volume", { id: sound.id, volume: v }).catch(console.warn);
+    queueVoiceVolume(sound.id, v);
   });
+  slider.addEventListener("change", () => flushVoiceVolume(sound.id));
+  slider.addEventListener("blur", () => flushVoiceVolume(sound.id));
   volRow.appendChild(slider);
   pad.appendChild(volRow);
 
@@ -212,7 +269,10 @@ function makePad(sound, active) {
   pad.addEventListener("click", async () => {
     if (!sound.available) return;
     try {
-      if (activeMap().has(sound.id)) await api("/api/voice/deactivate", { id: sound.id });
+      if (activeMap().has(sound.id)) {
+        await cancelVoiceVolume(sound.id);
+        await api("/api/voice/deactivate", { id: sound.id });
+      }
       else await api("/api/voice/activate", { id: sound.id });
     } catch (e) { console.warn(e); }
   });
@@ -385,8 +445,10 @@ function clearScheduleForm() {
 }
 
 function switchTab(name) {
+  visibleTab = name;
   $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
   $$(".pane").forEach(p => p.classList.toggle("active", p.id === `pane-${name}`));
+  render();
 }
 
 // ---------- wiring ----------
@@ -408,8 +470,10 @@ function wire() {
 
   $("#btn-pause").onclick = () =>
     api(state.paused ? "/api/resume" : "/api/pause").catch(console.warn);
-  $("#btn-stop").onclick = () => {
-    if (confirm("Stop all sounds?")) api("/api/stop-all").catch(console.warn);
+  $("#btn-stop").onclick = async () => {
+    if (!confirm("Stop all sounds?")) return;
+    await Promise.all(Array.from(voiceVolumes.keys()).map(cancelVoiceVolume));
+    api("/api/stop-all").catch(console.warn);
   };
 
   const masterEl = $("#master-volume");

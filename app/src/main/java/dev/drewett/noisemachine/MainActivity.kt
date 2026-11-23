@@ -45,7 +45,7 @@ class MainActivity : AppCompatActivity() {
         wv.webChromeClient = WebChromeClient()
         // Tiny delay to let the embedded server bind on cold start.
         wv.postDelayed({
-            wv.loadUrl("http://127.0.0.1:${settings.port}/")
+            wv.loadUrl("http://127.0.0.1:${settings.port}/?lightweight=1")
         }, 350)
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {

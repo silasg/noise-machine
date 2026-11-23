@@ -239,6 +239,22 @@ main { padding: 16px 18px 80px; }
 
 .muted { color: var(--muted); font-size: 13px; }
 
+/* Opted in by the embedded app, never by user-agent detection. */
+html.lightweight, html.lightweight body {
+  background: var(--bg);
+}
+html.lightweight *, html.lightweight *::before, html.lightweight *::after {
+  transition: none;
+  box-shadow: none;
+}
+html.lightweight .pad.active { box-shadow: none; }
+html.lightweight .dot.live { animation: none; }
+html.lightweight .topbar {
+  background: var(--bg);
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 @media (max-width: 600px) {
   .topbar h1 { font-size: 16px; }
   .next-fire { display: none; }
