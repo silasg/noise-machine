@@ -12,3 +12,13 @@
 *.aab
 *.keystore
 local.properties
+
+# Audio is prepared locally for APK builds, not stored in Git.
+*.ogg
+*.mp3
+*.wav
+*.flac
+*.m4a
+*.aac
+*.opus
+*.pcm
