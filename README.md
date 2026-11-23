@@ -12,7 +12,7 @@ or shelf, exposed only over Tailscale.
 - **Sounds:**
   - Procedurally synthesized: white noise, pink noise, brown noise,
     grandfather-clock ticking.
-  - Bundled looped recordings (you supply the audio files): rain, ocean, wind,
+  - Looped recordings (download locally before building; bundled in the APK): rain, ocean, wind,
     fan, fireplace, thunderstorm, forest birds, stream, coffee shop,
     ambient pad.
   - User-uploaded audio (mp3, ogg, wav, m4a, flac, opus) via the web UI.
@@ -53,10 +53,13 @@ Note: this repo does not include the Gradle wrapper jar. Either:
 - run `gradle wrapper --gradle-version 8.7` once with a system Gradle to
   generate `gradle/wrapper/gradle-wrapper.jar` and `gradlew`.
 
-## Adding the bundled audio loops
+## Preparing audio for the APK
 
-This repo intentionally does not ship audio. Drop seamlessly-looped OGG
-Vorbis files into `app/src/main/assets/sounds/` before building, named:
+This repository does not store audio binaries. Download and prepare the recordings
+locally using the script below; the build then bundles them in the APK for offline
+playback. See `SOUND-CREDITS.md` for individual licenses, source links and
+preparation notes; credits are also available in the app's Settings tab.
+The generated OGG Vorbis files go in `app/src/main/assets/sounds/`, named:
 
 ```
 rain.ogg ocean.ogg wind.ogg fan.ogg fireplace.ogg
@@ -66,34 +69,54 @@ storm.ogg forest.ogg stream.ogg cafe.ogg ambient.ogg
 Anything missing simply shows up as a disabled "missing audio file" tile.
 You can also upload arbitrary audio files at runtime in the **Library** tab.
 
-### Quick-fetch script
+### Reproduce the audio library
 
-`tools/fetch-sounds.sh` will pull the rain loop from Pixabay and an ambient
-track from YouTube straight into `app/src/main/assets/sounds/`. Requires
-`yt-dlp` and `ffmpeg` on your machine.
+Generated audio is ignored by Git; run the tracked downloader before packaging.
+Requires `curl`, `ffmpeg` (with libvorbis), `ffprobe` and Python 3.9+ (stdlib only).
 
 ```bash
-# defaults: Pixabay "Calming Rain Loop" + Scott Buckley "The Long Dark" (CC-BY 4.0)
-./tools/fetch-sounds.sh
+# Download rain manually from the credited Pixabay page, then:
+bash tools/fetch-sounds.sh --rain-file /path/to/downloaded-rain.mp3
 
-# override either URL with anything yt-dlp can extract
-./tools/fetch-sounds.sh \
-  --rain    "https://pixabay.com/sound-effects/nature-calming-rain-loop-398653/" \
-  --ambient "https://www.youtube.com/watch?v=<VIDEO_ID>"
+# Reproduce in isolation without touching installed assets:
+bash tools/fetch-sounds.sh --output-dir /tmp/noise-reproduced --rain-file /path/to/downloaded-rain.mp3
+
+# Explicitly replace existing generated assets:
+bash tools/fetch-sounds.sh --force --rain-file /path/to/downloaded-rain.mp3
 ```
 
-Always check the source's license before bundling. Pixabay sound effects
-are free with no attribution; CC-BY tracks (Scott Buckley, Kevin MacLeod,
-etc.) require crediting the creator somewhere user-visible. Don't bundle
-anything from a YouTube channel that hasn't explicitly granted download
-permission — many ambient channels are full copyrighted releases despite
-the "no copyright" titles. Safe sources:
+Existing assets are skipped by default, including `rain.ogg`. Missing `fan.pcm`
+is derived from the retained `fan.ogg`; replacing fan regenerates both. Local
+existing audio is user-owned and is not asserted to match pinned sources.
+Without rain already present, `--rain-file` is required. Download it manually:
+https://pixabay.com/sound-effects/nature-calming-rain-loop-398653/
+There is no Pixabay automation, YouTube download or yt-dlp dependency.
 
-- [Pixabay sound effects](https://pixabay.com/sound-effects/) — CC0-equivalent
-- [Scott Buckley](https://www.scottbuckley.com.au/library/) — CC-BY 4.0
-- [Kevin MacLeod / Incompetech](https://incompetech.com/music/royalty-free/) — CC-BY 4.0
-- [Freesound.org](https://freesound.org) — mix; check each file
-- [Free Music Archive](https://freemusicarchive.org/) — mix; check each file
+Seven Blanket recordings are pinned to commit
+`2eaca9ba5a1b624adf90b6ccee1008efc46f0273` and original SHA-256 checksums.
+The official Freesound HQ fan preview and OpenGameArt ambient original also
+have pinned source checksums. Originals are staged, never overwritten in place.
+Cafe uses the original FFmpeg 150 ms circular quarter-sine overlap; forest uses
+750 ms. Fan uses its distinct 50 ms float32 circular cosine/sine overlap.
+All three are Vorbis quality 5. Ambient and the other five Blanket OGGs remain
+byte-for-byte originals. Rain is converted to Vorbis quality 5 without loop edits.
+Fan PCM is mono 44100 Hz signed 16-bit little-endian decoded from final `fan.ogg`.
+Source verification is byte-exact; re-encoded Ogg bytes can vary with encoder
+versions/container serials. Matching FFmpeg/libvorbis versions are needed for
+sample-equivalent lossy output. No normalization or arbitrary cropping is added.
+
+All outputs are prepared and decoded before publication; each file is atomically
+renamed, with temporary files cleaned on failure. Publication is per-file, not a
+multi-file transaction. HTTP errors include their response body (including network
+approval instructions). A checksum mismatch aborts rather than accepting changed
+upstream content. See `SOUND-CREDITS.md` for licenses; Pixabay is not CC0.
+
+Validation (no network for focused tests):
+
+```bash
+bash -n tools/fetch-sounds.sh
+python3 -B -m unittest discover -s tools -p 'test_fetch_sounds.py'
+```
 
 ## Installing & permissions
 
