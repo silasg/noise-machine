@@ -5,7 +5,12 @@ const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 let state = null;
 let selectedDays = new Set();
-let lastRender = 0;
+const renderedSections = {};
+let lastEventAt = 0;
+let stateRevision = 0;
+let refreshPending = null;
+let commandRefreshTimer = null;
+let interactingControl = null;
 let evtSrc = null;
 let scheduleNextTimer = null;
 
@@ -19,7 +24,17 @@ async function api(path, body) {
   }
   const res = await fetch(path, opts);
   if (!res.ok) throw new Error(`${path}: ${res.status}`);
-  return res.headers.get("content-type")?.includes("application/json") ? res.json() : res.text();
+  const contentType = res.headers.get("content-type") || "";
+  const result = await (contentType.includes("application/json") ? res.json() : res.text());
+  if (path !== "/api/state") {
+    clearTimeout(commandRefreshTimer);
+    commandRefreshTimer = setTimeout(async () => {
+      // A poll started before the command may contain pre-command state.
+      if (refreshPending) await refreshPending.catch(() => {});
+      refresh().catch(console.warn);
+    }, 0);
+  }
+  return result;
 }
 
 function connectEvents() {
@@ -28,19 +43,37 @@ function connectEvents() {
     evtSrc = new EventSource("/api/events");
     evtSrc.onmessage = (e) => {
       try {
-        state = JSON.parse(e.data);
+        const snapshot = JSON.parse(e.data);
+        if (!snapshot || typeof snapshot !== "object") return;
+        state = snapshot;
+        stateRevision++;
+        lastEventAt = Date.now();
         render();
       } catch (_) {}
     };
     evtSrc.onerror = () => {
-      // EventSource auto-reconnects, but seed a poll fallback.
+      // Keep EventSource's reconnect, but poll until snapshots resume.
+      lastEventAt = 0;
     };
   } catch (_) {}
 }
 
 async function refresh() {
-  state = await api("/api/state");
-  render();
+  // Share in-flight polls; don't let an older HTTP response replace SSE state.
+  if (refreshPending) return refreshPending;
+  const revision = stateRevision;
+  refreshPending = (async () => {
+    try {
+      const snapshot = await api("/api/state");
+      if (revision === stateRevision) {
+        state = snapshot;
+        render();
+      }
+    } finally {
+      refreshPending = null;
+    }
+  })();
+  return refreshPending;
 }
 
 // ---------- rendering ----------
@@ -48,11 +81,34 @@ async function refresh() {
 function render() {
   if (!state) return;
   renderStatus();
-  renderPad();
-  renderScenes();
-  renderSchedule();
-  renderLibrary();
-  renderSettings();
+  renderSection("pad", [state.catalog, state.activeVoices], ["#pad-grid"], renderPad);
+  renderSection("master", state.masterVolume, ["#master-volume"], renderMaster);
+  renderSection("scenes", [state.scenes, state.catalog], ["#scene-list"], renderScenes);
+  renderSection("scene-options", (state.scenes || []).map(sc => sc.name),
+    ["#sched-scene"], renderSceneOptions);
+  const schedule = (state.schedule || []).map(entry => {
+    const copy = Object.assign({}, entry);
+    delete copy.nextTriggerMs;
+    return copy;
+  });
+  renderSection("schedule", schedule, ["#schedule-list"], renderSchedule);
+  renderSection("library", state.catalog, ["#library-list"], renderLibrary);
+  renderSection("settings", [state.settings, state.systemVolumeTarget],
+    ["#pane-settings"], renderSettings);
+}
+
+function renderSection(name, value, selectors, draw) {
+  const key = JSON.stringify(value);
+  if (renderedSections[name] === key) return;
+  const busy = selectors.some(selector => {
+    const root = $(selector);
+    const focused = document.activeElement;
+    return root && ((focused && /^(INPUT|SELECT|TEXTAREA)$/.test(focused.tagName) && root.contains(focused)) ||
+      (interactingControl && root.contains(interactingControl)));
+  });
+  if (busy) return; // Retry with the latest state when focus/drag ends.
+  draw();
+  renderedSections[name] = key;
 }
 
 function activeMap() {
@@ -85,14 +141,10 @@ function renderPad() {
   const active = activeMap();
   const cats = {};
   for (const s of (state.catalog || [])) {
-    (cats[s.category] ||= []).push(s);
+    if (!cats[s.category]) cats[s.category] = [];
+    cats[s.category].push(s);
   }
   grid.innerHTML = "";
-  // master
-  const mv = state.masterVolume ?? 0.6;
-  $("#master-volume").value = Math.round(mv * 100);
-  $("#master-readout").textContent = `${Math.round(mv * 100)}%`;
-
   for (const cat of Object.keys(cats)) {
     const heading = document.createElement("div");
     heading.style.gridColumn = "1 / -1";
@@ -109,9 +161,15 @@ function renderPad() {
   }
 }
 
+function renderMaster() {
+  const mv = state.masterVolume == null ? 0.6 : state.masterVolume;
+  $("#master-volume").value = Math.round(mv * 100);
+  $("#master-readout").textContent = `${Math.round(mv * 100)}%`;
+}
+
 function makePad(sound, active) {
   const isOn = active.has(sound.id);
-  const vol = active.get(sound.id) ?? 1;
+  const vol = active.has(sound.id) ? active.get(sound.id) : 1;
 
   const pad = document.createElement("div");
   pad.className = "pad" + (isOn ? " active" : "") + (sound.available ? "" : " unavailable");
@@ -154,7 +212,7 @@ function makePad(sound, active) {
   pad.addEventListener("click", async () => {
     if (!sound.available) return;
     try {
-      if (isOn) await api("/api/voice/deactivate", { id: sound.id });
+      if (activeMap().has(sound.id)) await api("/api/voice/deactivate", { id: sound.id });
       else await api("/api/voice/activate", { id: sound.id });
     } catch (e) { console.warn(e); }
   });
@@ -183,7 +241,10 @@ function renderScenes() {
     };
     list.appendChild(card);
   }
-  // Update schedule scene dropdown.
+}
+
+function renderSceneOptions() {
+  // Update options only when scene names change, not on every snapshot.
   const sceneSel = $("#sched-scene");
   const cur = sceneSel.value;
   sceneSel.innerHTML = "";
@@ -218,7 +279,7 @@ function renderSchedule() {
       </div>`;
     div.querySelector('[data-act="edit"]').onclick = () => loadScheduleEntry(e);
     div.querySelector('[data-act="toggle"]').onclick = () => {
-      api("/api/schedule/upsert", { ...e, enabled: !e.enabled }).catch(console.warn);
+      api("/api/schedule/upsert", Object.assign({}, e, { enabled: !e.enabled })).catch(console.warn);
     };
     div.querySelector('[data-act="delete"]').onclick = () => {
       if (confirm("Delete this schedule entry?"))
@@ -253,12 +314,12 @@ function renderLibrary() {
 
 function renderSettings() {
   const s = state.settings || {};
-  $("#set-port").value = s.port ?? 8378;
+  $("#set-port").value = s.port == null ? 8378 : s.port;
   $("#set-dnd").checked = !!s.enableDnd;
   $("#set-alarms-through-dnd").checked = !!s.allowAlarmsThroughDnd;
   $("#set-autostart").checked = !!s.autoStartOnBoot;
   $("#set-keep-screen").checked = !!s.keepScreenOn;
-  const sysv = state.systemVolumeTarget ?? 0.6;
+  const sysv = state.systemVolumeTarget == null ? 0.6 : state.systemVolumeTarget;
   $("#set-sysvol").value = Math.round(sysv * 100);
   $("#sysvol-readout").textContent = `${Math.round(sysv * 100)}%`;
 
@@ -284,7 +345,7 @@ function labelFor(id) {
   const s = (state.catalog || []).find(x => x.id === id);
   return s ? s.label : id;
 }
-function pad2(n) { return String(n).padStart(2, "0"); }
+function pad2(n) { return n < 10 ? "0" + n : String(n); }
 function dowLabel(d) {
   return ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][d] || String(d);
 }
@@ -331,6 +392,18 @@ function switchTab(name) {
 // ---------- wiring ----------
 
 function wire() {
+  document.addEventListener("focusout", () => setTimeout(render, 0));
+  const beginInteraction = e => { interactingControl = e.target; };
+  const endInteraction = () => {
+    interactingControl = null;
+    setTimeout(render, 0);
+  };
+  document.addEventListener("touchstart", beginInteraction, { passive: true });
+  document.addEventListener("mousedown", beginInteraction);
+  document.addEventListener("touchend", endInteraction);
+  document.addEventListener("touchcancel", endInteraction);
+  document.addEventListener("mouseup", endInteraction);
+  window.addEventListener("blur", endInteraction);
   $$(".tab").forEach(t => t.addEventListener("click", () => switchTab(t.dataset.tab)));
 
   $("#btn-pause").onclick = () =>
@@ -413,9 +486,9 @@ async function saveSettings(extra) {
     enableDnd: $("#set-dnd").checked,
     allowAlarmsThroughDnd: $("#set-alarms-through-dnd").checked,
     autoStartOnBoot: $("#set-autostart").checked,
-    keepScreenOn: $("#set-keep-screen").checked,
-    ...(extra || {})
+    keepScreenOn: $("#set-keep-screen").checked
   };
+  Object.assign(body, extra || {});
   try { await api("/api/settings", body); } catch (e) { console.warn(e); }
 }
 
@@ -423,6 +496,8 @@ async function saveSettings(extra) {
   wire();
   try { await refresh(); } catch (e) { console.warn(e); }
   connectEvents();
-  // poll fallback every 5s
-  setInterval(() => { refresh().catch(() => {}); }, 5000);
+  // Snapshots normally arrive every 1.5s. Poll only if SSE is absent or stale.
+  setInterval(() => {
+    if (!lastEventAt || Date.now() - lastEventAt > 6500) refresh().catch(() => {});
+  }, 5000);
 })();
