@@ -100,7 +100,9 @@ Cafe uses the original FFmpeg 150 ms circular quarter-sine overlap; forest uses
 750 ms. Fan uses its distinct 50 ms float32 circular cosine/sine overlap.
 All three are Vorbis quality 5. Ambient and the other five Blanket OGGs remain
 byte-for-byte originals. Rain is converted to Vorbis quality 5 without loop edits.
-Fan PCM is mono 44100 Hz signed 16-bit little-endian decoded from final `fan.ogg`.
+All ten recorded sounds have mono 44100 Hz signed 16-bit little-endian `.pcm` copies decoded from their final retained OGG, without normalization or trimming. Existing OGG processing and sources are unchanged. Missing PCM is rebuilt without downloading; replacing OGG also replaces its PCM.
+
+PCM assets currently total 60,084,066 bytes (57.30 MiB) before APK compression (roughly 66 MiB budget, duration-dependent). Streaming uses fixed buffers per active sound, not a roughly 131 MiB decoded stereo cache; fan retains its tiny cached loop. User uploads still use MediaPlayer.
 Source verification is byte-exact; re-encoded Ogg bytes can vary with encoder
 versions/container serials. Matching FFmpeg/libvorbis versions are needed for
 sample-equivalent lossy output. No normalization or arbitrary cropping is added.

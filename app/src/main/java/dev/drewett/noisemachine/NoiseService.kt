@@ -119,7 +119,11 @@ class NoiseService : Service() {
             }
             SoundCatalog.Sound.Kind.FILE -> {
                 val source = sound.source
-                if (source is SoundCatalog.Sound.Source.SampleLoop) {
+                if (source is SoundCatalog.Sound.Source.PcmStream) {
+                    proceduralMixer.setVoice(dev.drewett.noisemachine.audio.PcmStreamVoice(id, {
+                        assets.open(source.assetPath)
+                    }), v)
+                } else if (source is SoundCatalog.Sound.Source.SampleLoop) {
                     val samples = loopSamples.computeIfAbsent(source.assetPath) {
                         assets.open(source.assetPath).use {
                             PcmSamples.decodeSigned16LittleEndian(it.readBytes())

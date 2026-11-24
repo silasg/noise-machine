@@ -7,6 +7,37 @@ import org.junit.Test
 
 /** State-only mixer checks: these do not start or emulate Android AudioTrack. */
 class ProceduralMixerVoiceTest {
+    @Test fun `stop rejects and closes later voices`() {
+        val mixer = ProceduralMixer()
+        mixer.stop()
+        val voice = PcmStreamVoice("late", { java.io.ByteArrayInputStream(byteArrayOf(0, 64)) }, 1)
+        mixer.setVoice(voice, 1f)
+        try {
+            assertFalse(mixer.isActive("late"))
+            assertTrue(voice.awaitTermination(2000))
+        } finally { mixer.remove("late"); voice.close() }
+    }
+
+    @Test fun `replacement removal and stop release stream producers`() {
+        val mixer = ProceduralMixer()
+        fun voice(id: String) = PcmStreamVoice(id, { java.io.ByteArrayInputStream(byteArrayOf(0, 64)) }, 1)
+        val first = voice("same")
+        val replacement = voice("same")
+        val other = voice("other")
+        try {
+            mixer.setVoice(first, 1f)
+            mixer.setVoice(replacement, 1f)
+            assertTrue(first.awaitTermination(2000))
+            assertEquals(setOf("same"), mixer.activeIds())
+            mixer.remove("same")
+            assertTrue(replacement.awaitTermination(2000))
+            mixer.setVoice(other, 1f)
+            mixer.stop()
+            assertTrue(other.awaitTermination(2000))
+            assertTrue(mixer.activeIds().isEmpty())
+        } finally { first.close(); replacement.close(); other.close(); mixer.stop() }
+    }
+
     @Test fun `fan participates in existing active voice removal path`() {
         // Arrange
         val mixer = ProceduralMixer()

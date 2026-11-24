@@ -11,6 +11,7 @@ import kotlin.random.Random
  */
 interface ProceduralVoice {
     val id: String
+    fun close() {}
     fun render(out: FloatArray, frames: Int, sampleRate: Int)
 }
 

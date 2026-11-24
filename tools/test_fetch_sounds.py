@@ -39,7 +39,8 @@ class FetchTests(unittest.TestCase):
     def test_existing_assets_are_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            names = [f"{row[0]}.ogg" for row in fetch.SOURCES] + ["fan.ogg", "ambient.ogg", "rain.ogg", "fan.pcm"]
+            names = [f"{row[0]}.ogg" for row in fetch.SOURCES] + ["fan.ogg", "ambient.ogg", "rain.ogg"]
+            names += [name.replace(".ogg", ".pcm") for name in names]
             for name in names:
                 (root / name).write_bytes(b"user audio")
             with patch("sys.argv", ["fetch", "--output-dir", tmp]), patch.object(fetch, "download") as download:
@@ -55,15 +56,45 @@ class FetchTests(unittest.TestCase):
                 (root / f"{name}.ogg").write_bytes(b"retained audio")
 
             def convert(*args: str) -> None:
-                self.assertEqual(args[:2], ("-i", str(root / "fan.ogg")))
+                self.assertEqual(args[0], "-i")
+                self.assertEqual(Path(args[1]).parent, root)
                 self.assertIn("s16le", args)
                 Path(args[-1]).write_bytes(b"\x01\x00")
 
             with patch("sys.argv", ["fetch", "--output-dir", tmp]), patch.object(fetch, "download") as download, patch.object(fetch, "ffmpeg", side_effect=convert):
                 fetch.main()
                 download.assert_not_called()
+            self.assertEqual(len(list(root.glob("*.pcm"))), 10)
             self.assertEqual((root / "fan.pcm").read_bytes(), b"\x01\x00")
             self.assertEqual((root / "fan.ogg").read_bytes(), b"retained audio")
+
+    def test_replacing_ogg_replaces_pcm_and_failure_preserves_inputs(self) -> None:
+        # Arrange
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            stems = [row[0] for row in fetch.SOURCES] + ["fan", "ambient", "rain"]
+            for stem in stems:
+                (root / f"{stem}.ogg").write_bytes(b"old ogg")
+                (root / f"{stem}.pcm").write_bytes(b"old pcm")
+            rain = root / "manual.mp3"
+            rain.write_bytes(b"manual")
+            def convert(*args: str) -> None:
+                if args[-1] != "-":
+                    Path(args[-1]).write_bytes(b"new")
+            def download(url, target, digest):
+                target.write_bytes(b"new")
+            # Act
+            with patch("sys.argv", ["fetch", "--output-dir", tmp, "--force", "--rain-file", str(rain)]), patch.object(fetch, "download", side_effect=download), patch.object(fetch, "blanket_wrap", side_effect=lambda src, dst, fade: dst.write_bytes(b"new")), patch.object(fetch, "fan_wrap", side_effect=lambda src, dst: dst.write_bytes(b"new")), patch.object(fetch, "ffmpeg", side_effect=RuntimeError("decode failed")):
+                with self.assertRaises(RuntimeError):
+                    fetch.main()
+            # Assert
+            self.assertTrue(all((root / f"{stem}.pcm").read_bytes() == b"old pcm" for stem in stems))
+            self.assertTrue(all((root / f"{stem}.ogg").read_bytes() == b"old ogg" for stem in stems))
+            # Act
+            with patch("sys.argv", ["fetch", "--output-dir", tmp, "--force", "--rain-file", str(rain)]), patch.object(fetch, "download", side_effect=download), patch.object(fetch, "blanket_wrap", side_effect=lambda src, dst, fade: dst.write_bytes(b"new")), patch.object(fetch, "fan_wrap", side_effect=lambda src, dst: dst.write_bytes(b"new")), patch.object(fetch, "ffmpeg", side_effect=convert):
+                fetch.main()
+            # Assert
+            self.assertTrue(all((root / f"{stem}.pcm").read_bytes() == b"new" for stem in stems))
 
     def test_force_requires_manual_rain_even_if_existing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

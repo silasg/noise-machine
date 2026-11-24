@@ -23,6 +23,7 @@ object SoundCatalog {
         sealed class Source {
             data class Procedural(val type: String) : Source()
             data class Asset(val assetPath: String) : Source()
+            data class PcmStream(val assetPath: String) : Source()
             data class SampleLoop(val assetPath: String, val sampleRate: Int) : Source()
             data class User(val path: String) : Source()
         }
@@ -53,16 +54,16 @@ object SoundCatalog {
     )
 
     private val BUILTIN_FILES: List<Builtin> = listOf(
-        Builtin("rain", "Rain", "sounds/rain.ogg", "Nature"),
-        Builtin("ocean", "Ocean waves", "sounds/ocean.ogg", "Nature"),
-        Builtin("wind", "Wind outside", "sounds/wind.ogg", "Nature"),
+        Builtin("rain", "Rain", "sounds/rain.pcm", "Nature"),
+        Builtin("ocean", "Ocean waves", "sounds/ocean.pcm", "Nature"),
+        Builtin("wind", "Wind outside", "sounds/wind.pcm", "Nature"),
         Builtin("fan", "Fan", "sounds/fan.pcm", "Indoor", loopSampleRate = 44100),
-        Builtin("fireplace", "Fireplace", "sounds/fireplace.ogg", "Indoor"),
-        Builtin("storm", "Thunderstorm", "sounds/storm.ogg", "Nature"),
-        Builtin("forest", "Forest birds", "sounds/forest.ogg", "Nature"),
-        Builtin("stream", "Babbling stream", "sounds/stream.ogg", "Nature"),
-        Builtin("cafe", "Coffee shop", "sounds/cafe.ogg", "Indoor"),
-        Builtin("ambient", "Ambient pad", "sounds/ambient.ogg", "Music"),
+        Builtin("fireplace", "Fireplace", "sounds/fireplace.pcm", "Indoor"),
+        Builtin("storm", "Thunderstorm", "sounds/storm.pcm", "Nature"),
+        Builtin("forest", "Forest birds", "sounds/forest.pcm", "Nature"),
+        Builtin("stream", "Babbling stream", "sounds/stream.pcm", "Nature"),
+        Builtin("cafe", "Coffee shop", "sounds/cafe.pcm", "Indoor"),
+        Builtin("ambient", "Ambient pad", "sounds/ambient.pcm", "Music"),
     )
 
     fun userSoundsDir(ctx: Context): File =
@@ -79,7 +80,7 @@ object SoundCatalog {
         for (b in BUILTIN_FILES) {
             val available = assetSet.contains(b.asset.removePrefix("sounds/"))
             val source = b.loopSampleRate?.let { Sound.Source.SampleLoop(b.asset, it) }
-                ?: Sound.Source.Asset(b.asset)
+                ?: Sound.Source.PcmStream(b.asset)
             out += Sound(b.id, b.label, Sound.Kind.FILE,
                 source, b.category, true) to available
         }

@@ -19,12 +19,14 @@ class ProceduralMixer(
     private data class Active(val voice: ProceduralVoice, var volume: Float)
 
     private val active = ConcurrentHashMap<String, Active>()
+    @Volatile private var renderVoices = emptyArray<Active>()
     @Volatile private var masterVolume: Float = 1f
     @Volatile private var running = false
+    private var acceptingVoices = true
     private var track: AudioTrack? = null
     private var renderThread: Thread? = null
 
-    fun start() {
+    @Synchronized fun start() {
         if (running) return
         val minBuf = AudioTrack.getMinBufferSize(
             sampleRate,
@@ -49,14 +51,14 @@ class ProceduralMixer(
             .build()
         track?.play()
 
+        acceptingVoices = true
         running = true
         renderThread = thread(name = "ProceduralMixer", isDaemon = true) {
             val mix = FloatArray(bufferFrames)
             val tmp = FloatArray(bufferFrames)
             while (running) {
                 java.util.Arrays.fill(mix, 0f)
-                val snapshot = active.values.toList()
-                for (a in snapshot) {
+                for (a in renderVoices) {
                     a.voice.render(tmp, bufferFrames, sampleRate)
                     val v = a.volume
                     for (i in 0 until bufferFrames) mix[i] += tmp[i] * v
@@ -76,27 +78,37 @@ class ProceduralMixer(
         }
     }
 
-    fun stop() {
+    @Synchronized fun stop() {
+        acceptingVoices = false
         running = false
         try { renderThread?.join(500) } catch (_: Throwable) {}
         renderThread = null
         try { track?.stop() } catch (_: Throwable) {}
         try { track?.release() } catch (_: Throwable) {}
         track = null
+        for (id in active.keys.toList()) remove(id)
     }
 
     fun setMasterVolume(v: Float) { masterVolume = v.coerceIn(0f, 2f) }
 
-    fun setVoice(voice: ProceduralVoice, volume: Float) {
-        active[voice.id] = Active(voice, volume.coerceIn(0f, 2f))
+    @Synchronized fun setVoice(voice: ProceduralVoice, volume: Float) {
+        if (!acceptingVoices) {
+            voice.close()
+            return
+        }
+        val old = active.put(voice.id, Active(voice, volume.coerceIn(0f, 2f)))
+        renderVoices = active.values.toTypedArray()
+        old?.voice?.close()
     }
 
     fun setVolume(id: String, volume: Float) {
         active[id]?.volume = volume.coerceIn(0f, 2f)
     }
 
-    fun remove(id: String) {
-        active.remove(id)
+    @Synchronized fun remove(id: String) {
+        val old = active.remove(id)
+        renderVoices = active.values.toTypedArray()
+        old?.voice?.close()
     }
 
     fun isActive(id: String) = active.containsKey(id)

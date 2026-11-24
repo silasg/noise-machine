@@ -134,17 +134,18 @@ def main() -> None:
             download(FAN_URL, stage / "fan.mp3", FAN_SHA)
             fan_wrap(stage / "fan.mp3", stage / "fan.ogg")
             pending.append("fan.ogg")
-        # Always regenerate PCM when replacing OGG; otherwise derive missing PCM
-        # from the user's retained OGG (no claim that arbitrary local audio is pinned).
-        if needed("fan.pcm") or "fan.ogg" in pending:
-            fan = stage / "fan.ogg" if "fan.ogg" in pending else output / "fan.ogg"
-            ffmpeg("-i", str(fan), "-ac", "1", "-ar", "44100", "-c:a", "pcm_s16le",
-                   "-f", "s16le", str(stage / "fan.pcm"))
-            pending.append("fan.pcm")
         if needed("rain.ogg"):
             ffmpeg("-i", str(args.rain_file.resolve()), "-c:a", "libvorbis", "-q:a", "5",
                    str(stage / "rain.ogg"))
             pending.append("rain.ogg")
+        # Decode final retained/staged OGG only; never normalize or trim PCM.
+        for stem in [row[0] for row in SOURCES] + ["fan", "ambient", "rain"]:
+            ogg, pcm = f"{stem}.ogg", f"{stem}.pcm"
+            if needed(pcm) or ogg in pending:
+                source = stage / ogg if ogg in pending else output / ogg
+                ffmpeg("-i", str(source), "-ac", "1", "-ar", "44100", "-c:a", "pcm_s16le",
+                       "-f", "s16le", str(stage / pcm))
+                pending.append(pcm)
         for name in pending:
             if name.endswith(".ogg"):
                 ffmpeg("-i", str(stage / name), "-f", "null", "-")
