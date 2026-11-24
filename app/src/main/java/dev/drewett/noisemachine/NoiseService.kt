@@ -19,6 +19,8 @@ import dev.drewett.noisemachine.audio.BrownNoiseVoice
 import dev.drewett.noisemachine.audio.ClockTickVoice
 import dev.drewett.noisemachine.audio.FileSource
 import dev.drewett.noisemachine.audio.FileVoice
+import dev.drewett.noisemachine.audio.PcmSamples
+import dev.drewett.noisemachine.audio.SampleLoopVoice
 import dev.drewett.noisemachine.audio.PinkNoiseVoice
 import dev.drewett.noisemachine.audio.ProceduralMixer
 import dev.drewett.noisemachine.audio.ProceduralVoice
@@ -42,6 +44,7 @@ class NoiseService : Service() {
 
     private val proceduralMixer = ProceduralMixer()
     private val fileVoices = ConcurrentHashMap<String, FileVoice>()
+    private val loopSamples = ConcurrentHashMap<String, FloatArray>()
     private var webServer: WebServer? = null
 
     @Volatile private var paused = false
@@ -115,17 +118,27 @@ class NoiseService : Service() {
                 proceduralMixer.setVoice(voice, v)
             }
             SoundCatalog.Sound.Kind.FILE -> {
-                fileVoices[id]?.stop()
-                val src = when (val s = sound.source) {
-                    is SoundCatalog.Sound.Source.Asset -> FileSource.Asset(s.assetPath)
-                    is SoundCatalog.Sound.Source.User -> FileSource.User(s.path)
-                    else -> throw IllegalStateException()
+                val source = sound.source
+                if (source is SoundCatalog.Sound.Source.SampleLoop) {
+                    val samples = loopSamples.computeIfAbsent(source.assetPath) {
+                        assets.open(source.assetPath).use {
+                            PcmSamples.decodeSigned16LittleEndian(it.readBytes())
+                        }
+                    }
+                    proceduralMixer.setVoice(SampleLoopVoice(id, samples, source.sampleRate), v)
+                } else {
+                    fileVoices[id]?.stop()
+                    val src = when (val s = sound.source) {
+                        is SoundCatalog.Sound.Source.Asset -> FileSource.Asset(s.assetPath)
+                        is SoundCatalog.Sound.Source.User -> FileSource.User(s.path)
+                        else -> throw IllegalStateException()
+                    }
+                    val fv = FileVoice(this, id, src)
+                    fv.setMasterMultiplier(settings.masterVolume)
+                    fv.setVolume(v)
+                    fv.start()
+                    fileVoices[id] = fv
                 }
-                val fv = FileVoice(this, id, src)
-                fv.setMasterMultiplier(settings.masterVolume)
-                fv.setVolume(v)
-                fv.start()
-                fileVoices[id] = fv
             }
         }
         settings.activeVoices[id] = v

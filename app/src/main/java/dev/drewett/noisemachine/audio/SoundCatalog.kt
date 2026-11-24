@@ -23,6 +23,7 @@ object SoundCatalog {
         sealed class Source {
             data class Procedural(val type: String) : Source()
             data class Asset(val assetPath: String) : Source()
+            data class SampleLoop(val assetPath: String, val sampleRate: Int) : Source()
             data class User(val path: String) : Source()
         }
         fun toJson(available: Boolean): JSONObject = JSONObject().apply {
@@ -46,13 +47,16 @@ object SoundCatalog {
             Sound.Source.Procedural("clock"), "Synthesized", true),
     )
 
-    private data class Builtin(val id: String, val label: String, val asset: String, val category: String)
+    private data class Builtin(
+        val id: String, val label: String, val asset: String, val category: String,
+        val loopSampleRate: Int? = null
+    )
 
     private val BUILTIN_FILES: List<Builtin> = listOf(
         Builtin("rain", "Rain", "sounds/rain.ogg", "Nature"),
         Builtin("ocean", "Ocean waves", "sounds/ocean.ogg", "Nature"),
         Builtin("wind", "Wind outside", "sounds/wind.ogg", "Nature"),
-        Builtin("fan", "Fan", "sounds/fan.ogg", "Indoor"),
+        Builtin("fan", "Fan", "sounds/fan.pcm", "Indoor", loopSampleRate = 44100),
         Builtin("fireplace", "Fireplace", "sounds/fireplace.ogg", "Indoor"),
         Builtin("storm", "Thunderstorm", "sounds/storm.ogg", "Nature"),
         Builtin("forest", "Forest birds", "sounds/forest.ogg", "Nature"),
@@ -74,8 +78,10 @@ object SoundCatalog {
 
         for (b in BUILTIN_FILES) {
             val available = assetSet.contains(b.asset.removePrefix("sounds/"))
+            val source = b.loopSampleRate?.let { Sound.Source.SampleLoop(b.asset, it) }
+                ?: Sound.Source.Asset(b.asset)
             out += Sound(b.id, b.label, Sound.Kind.FILE,
-                Sound.Source.Asset(b.asset), b.category, true) to available
+                source, b.category, true) to available
         }
 
         val dir = userSoundsDir(ctx)
