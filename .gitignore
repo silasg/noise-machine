@@ -12,6 +12,7 @@
 *.aab
 *.keystore
 local.properties
+/tools/__pycache__/
 
 # Audio is prepared locally for APK builds, not stored in Git.
 *.ogg
