@@ -469,11 +469,11 @@ function wire() {
   $$(".tab").forEach(t => t.addEventListener("click", () => switchTab(t.dataset.tab)));
 
   $("#btn-pause").onclick = () =>
-    api(state.paused ? "/api/resume" : "/api/pause").catch(console.warn);
+    api(state.paused ? "/api/resume" : "/api/pause", {}).catch(console.warn);
   $("#btn-stop").onclick = async () => {
     if (!confirm("Stop all sounds?")) return;
     await Promise.all(Array.from(voiceVolumes.keys()).map(cancelVoiceVolume));
-    api("/api/stop-all").catch(console.warn);
+    api("/api/stop-all", {}).catch(console.warn);
   };
 
   const masterEl = $("#master-volume");
