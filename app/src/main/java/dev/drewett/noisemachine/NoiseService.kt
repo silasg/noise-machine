@@ -48,6 +48,33 @@ class NoiseService : Service() {
     private var webServer: WebServer? = null
 
     @Volatile private var paused = false
+    private var destroyed = false
+    private val fade = dev.drewett.noisemachine.audio.PlaybackFade()
+    private val fadeHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val fadeTick = object : Runnable {
+        override fun run() = synchronized(this@NoiseService) {
+            fade.tick(android.os.SystemClock.uptimeMillis())
+            applyPlaybackGain()
+            if (fade.running) fadeHandler.postDelayed(this, 20L)
+            Unit
+        }
+    }
+
+    private fun applyPlaybackGain() {
+        val volume = settings.masterVolume * fade.gain
+        proceduralMixer.setMasterVolume(volume)
+        for (voice in fileVoices.values) voice.setMasterMultiplier(volume)
+    }
+
+    private fun fadeTo(gain: Float, complete: () -> Unit = {}) {
+        if (destroyed) return
+        fadeHandler.removeCallbacks(fadeTick)
+        fade.start(gain, android.os.SystemClock.uptimeMillis()) {
+            applyPlaybackGain()
+            complete()
+        }
+        fadeHandler.post(fadeTick)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -62,13 +89,16 @@ class NoiseService : Service() {
         acquireWakeLock()
 
         proceduralMixer.start()
-        proceduralMixer.setMasterVolume(settings.masterVolume)
+        fade.start(0f, 0L)
+        fade.tick(1000L)
+        applyPlaybackGain()
 
         // Restore active voices.
         for ((id, vol) in settings.activeVoices.toMap()) {
             try { activate(id, vol, persist = false) } catch (_: Throwable) {}
         }
 
+        fadeTo(1f)
         applyDndIfRequested()
         applySystemVolume()
         startWebServer()
@@ -87,9 +117,11 @@ class NoiseService : Service() {
         return START_STICKY
     }
 
-    override fun onDestroy() {
+    @Synchronized override fun onDestroy() {
+        destroyed = true
         super.onDestroy()
         instance = null
+        fadeHandler.removeCallbacksAndMessages(null)
         try { webServer?.stop() } catch (_: Throwable) {}
         webServer = null
         for (v in fileVoices.values.toList()) v.stop()
@@ -102,7 +134,8 @@ class NoiseService : Service() {
 
     // ----- Public API used by WebServer -----
 
-    fun activate(id: String, volume: Float? = null, persist: Boolean = true) {
+    @Synchronized fun activate(id: String, volume: Float? = null, persist: Boolean = true) {
+        check(!destroyed) { "service is stopping" }
         val sound = SoundCatalog.find(this, id) ?: throw IllegalArgumentException("unknown sound: $id")
         val v = (volume ?: settings.activeVoices[id] ?: 1f).coerceIn(0f, 2f)
         ensureAudioFocus()
@@ -138,9 +171,10 @@ class NoiseService : Service() {
                         else -> throw IllegalStateException()
                     }
                     val fv = FileVoice(this, id, src)
-                    fv.setMasterMultiplier(settings.masterVolume)
+                    fv.setMasterMultiplier(settings.masterVolume * fade.gain)
                     fv.setVolume(v)
                     fv.start()
+                    if (paused && !fade.running) fv.pause()
                     fileVoices[id] = fv
                 }
             }
@@ -150,7 +184,7 @@ class NoiseService : Service() {
         updateNotification()
     }
 
-    fun deactivate(id: String, persist: Boolean = true) {
+    @Synchronized fun deactivate(id: String, persist: Boolean = true) {
         proceduralMixer.remove(id)
         fileVoices.remove(id)?.stop()
         settings.activeVoices.remove(id)
@@ -158,7 +192,7 @@ class NoiseService : Service() {
         updateNotification()
     }
 
-    fun setVoiceVolume(id: String, volume: Float) {
+    @Synchronized fun setVoiceVolume(id: String, volume: Float) {
         val v = volume.coerceIn(0f, 2f)
         if (proceduralMixer.isActive(id)) proceduralMixer.setVolume(id, v)
         fileVoices[id]?.setVolume(v)
@@ -168,27 +202,39 @@ class NoiseService : Service() {
         }
     }
 
-    fun setMasterVolume(v: Float) {
+    @Synchronized fun setMasterVolume(v: Float) {
         val cv = v.coerceIn(0f, 2f)
         settings.masterVolume = cv
-        proceduralMixer.setMasterVolume(cv)
-        for (fv in fileVoices.values) fv.setMasterMultiplier(cv)
+        applyPlaybackGain()
         settings.save()
     }
 
-    fun stopAllVoices() {
+    @Synchronized fun stopAllVoices() {
+        fadeTo(0f) { stopAllImmediately() }
+    }
+
+    private fun stopAllImmediately() {
+        paused = false
         for (id in proceduralMixer.activeIds().toList()) proceduralMixer.remove(id)
         for (v in fileVoices.values.toList()) v.stop()
         fileVoices.clear()
+        fade.start(1f, 0L)
+        fade.tick(1000L)
         settings.activeVoices.clear()
         settings.save()
         abandonFocus()
         updateNotification()
     }
 
-    fun applyScene(sceneName: String) {
+    @Synchronized fun applyScene(sceneName: String) {
         val scene = settings.scenes.firstOrNull { it.name == sceneName }
             ?: throw IllegalArgumentException("scene not found: $sceneName")
+        val starting = activeState().isEmpty()
+        if (starting) {
+            fade.start(0f, 0L)
+            fade.tick(1000L)
+            applyPlaybackGain()
+        }
         // Stop voices not in the scene
         val keepIds = scene.voices.map { it.id }.toSet()
         for (id in (proceduralMixer.activeIds() + fileVoices.keys).toSet()) {
@@ -196,6 +242,7 @@ class NoiseService : Service() {
         }
         setMasterVolume(scene.masterVolume)
         for (v in scene.voices) activate(v.id, v.volume, persist = false)
+        resumePlayback()
         settings.save()
     }
 
@@ -206,19 +253,20 @@ class NoiseService : Service() {
         return m
     }
 
-    fun pausePlayback() {
-        if (paused) return
+    @Synchronized fun pausePlayback() {
+        if (destroyed) return
         paused = true
-        for (fv in fileVoices.values) fv.pause()
-        proceduralMixer.setMasterVolume(0f)
+        fadeTo(0f) {
+            for (fv in fileVoices.values) fv.pause()
+        }
         updateNotification()
     }
 
-    fun resumePlayback() {
-        if (!paused) return
+    @Synchronized fun resumePlayback() {
+        if (destroyed) return
         paused = false
-        proceduralMixer.setMasterVolume(settings.masterVolume)
         for (fv in fileVoices.values) fv.resume()
+        fadeTo(1f)
         updateNotification()
     }
 
