@@ -134,6 +134,50 @@ python3 -B -m unittest discover -s tools -p 'test_fetch_sounds.py'
 5. The first time playback starts, you may also need to grant
    `POST_NOTIFICATIONS` for the persistent foreground notification.
 
+## Wi-Fi Watchdog
+
+The watchdog is off by default. On Android 8 or 9, connect the tablet to a
+saved Wi-Fi network, then turn on **Automatically reconnect Wi-Fi** in the
+Noise Machine **Settings** tab. The foreground service saves that network as
+the target and checks its local connection state even when audio is idle and
+the display is off. If Wi-Fi stays disconnected for 15 seconds, the watchdog
+asks Android to select the saved network and waits up to 30 seconds for
+confirmation. Failed attempts are followed by 30-, 60-, and 120-second
+retry delays and then a five-minute cooldown. For recovery across a reboot,
+leave **Auto-start on boot** enabled. If Android refuses access or cannot identify the saved network, the
+toggle shows the reason. Select a saved network in Android Settings, then
+try again. The stock Android 8.1 API path needs no Location grant or Location
+services.
+
+To verify on the Android 8.1 tablet:
+
+1. Leave playback idle, enable the watchdog and confirm that **Target SSID**
+   and **Connected** appear.
+2. Turn off the display. From the access point, interrupt the tablet's
+   connection for more than 15 seconds while leaving the tablet's Wi-Fi on
+   and the saved configuration intact. Restore access to the same Wi-Fi
+   network. Use `adb logcat -s WifiWatchdog` over USB to confirm a repair
+   request followed by a verified connection. A short interruption that
+   Android repairs during the grace period may show no request.
+3. Reopen Settings and check the last successful connection and repair
+   attempt. Reboot with **Auto-start on boot** on and confirm the toggle and
+   target are restored.
+4. Turn off the watchdog and repeat the drop. Check that there are no
+   watchdog repair requests. With the watchdog enabled, turning off Wi-Fi
+   in Android Settings should leave Wi-Fi off.
+
+The watchdog confirms the target connection locally and does not check DNS
+or internet access. It leaves other working Wi-Fi connections alone. Android
+10 and newer restrict saved-network repair for ordinary apps. OEM firmware
+can also restrict repair, and Android suspension can delay checks. Diagnostic
+timestamps cover the current service session.
+
+The existing `POST /api/settings` accepts `{"wifiWatchdogEnabled":true}` or
+`false`. The response, `GET /api/state`, and `GET /api/events` include a
+`wifiWatchdog` snapshot with `enabled`, `targetSsid`, `status`,
+`lastConnectedAtMs`, `lastAttemptAtMs`, and `lastError`. Timestamps are
+Unix milliseconds. Failed toggle requests return HTTP 409 with an error.
+
 ## Connecting over Tailscale
 
 1. Install the Tailscale app on the noise-machine Android device, sign in,

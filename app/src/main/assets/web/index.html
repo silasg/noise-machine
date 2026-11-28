@@ -112,6 +112,19 @@
       <label class="check"><input type="checkbox" id="set-keep-screen"> Keep screen on (in-app activity)</label>
       <div id="permission-warnings" class="permission-warnings"></div>
       <p class="muted">Settings are saved automatically. Changing the port restarts the web server.</p>
+      <section aria-labelledby="wifi-watchdog-title">
+        <h2 id="wifi-watchdog-title">Wi-Fi Watchdog</h2>
+        <label class="check"><input type="checkbox" id="set-wifi-watchdog" disabled
+          aria-describedby="wifi-watchdog-description"> Automatically reconnect Wi-Fi</label>
+        <p class="muted" id="wifi-watchdog-description">Monitor the Wi-Fi connection and automatically reconnect to the saved network if the connection is lost.</p>
+        <div id="wifi-watchdog-details" class="muted" hidden>
+          <div>Target SSID <strong id="wifi-watchdog-target"></strong></div>
+          <div>Status <strong id="wifi-watchdog-status"></strong></div>
+          <div>Last successful connection <span id="wifi-watchdog-connected"></span></div>
+          <div>Last repair attempt <span id="wifi-watchdog-attempt"></span></div>
+        </div>
+        <p id="wifi-watchdog-error" class="warning" role="alert" hidden></p>
+      </section>
       <p><a href="/static/sound-credits.html">Sound credits and licenses</a></p>
     </div>
   </section>

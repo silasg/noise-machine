@@ -27,6 +27,7 @@ import dev.drewett.noisemachine.audio.ProceduralVoice
 import dev.drewett.noisemachine.audio.SoundCatalog
 import dev.drewett.noisemachine.audio.WhiteNoiseVoice
 import dev.drewett.noisemachine.net.WebServer
+import dev.drewett.noisemachine.net.WifiWatchdog
 import dev.drewett.noisemachine.state.ScheduleManager
 import dev.drewett.noisemachine.state.Settings
 import java.util.concurrent.ConcurrentHashMap
@@ -46,6 +47,8 @@ class NoiseService : Service() {
     private val fileVoices = ConcurrentHashMap<String, FileVoice>()
     private val loopSamples = ConcurrentHashMap<String, FloatArray>()
     private var webServer: WebServer? = null
+    internal lateinit var wifiWatchdog: WifiWatchdog
+        private set
 
     @Volatile private var paused = false
     private var destroyed = false
@@ -80,7 +83,6 @@ class NoiseService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
         settings = Settings.get(this)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -101,6 +103,8 @@ class NoiseService : Service() {
         fadeTo(1f)
         applyDndIfRequested()
         applySystemVolume()
+        wifiWatchdog = WifiWatchdog(this)
+        instance = this
         startWebServer()
 
         // Wire up scheduled entries.
@@ -121,6 +125,7 @@ class NoiseService : Service() {
         destroyed = true
         super.onDestroy()
         instance = null
+        wifiWatchdog.close()
         fadeHandler.removeCallbacksAndMessages(null)
         try { webServer?.stop() } catch (_: Throwable) {}
         webServer = null
