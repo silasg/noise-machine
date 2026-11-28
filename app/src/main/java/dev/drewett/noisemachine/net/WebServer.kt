@@ -12,6 +12,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.util.Locale
 import java.util.UUID
 
 /**
@@ -224,6 +225,14 @@ class WebServer(
     }
 
     private fun handleSettings(body: JSONObject): Response {
+        if (body.has("wifiWatchdogEnabled")) {
+            val watchdog = service?.wifiWatchdog
+                ?: return error("Noise Machine service is unavailable.", Response.Status.SERVICE_UNAVAILABLE)
+            val failure = watchdog.setEnabled(body.getBoolean("wifiWatchdogEnabled"))
+            if (failure != null) return error(failure, Response.Status.CONFLICT)
+        }
+        if (body.length() == 1 && body.has("wifiWatchdogEnabled")) return json(stateJson())
+
         val s = Settings.get(context)
         var portChanged = false
         if (body.has("port")) {
@@ -356,7 +365,15 @@ class WebServer(
                 .put("durationMinutes", e.durationMinutes ?: JSONObject.NULL)
                 .put("nextTriggerMs", nextMs ?: JSONObject.NULL))
         }
+        val wifi = service?.wifiWatchdog?.snapshot ?: WifiWatchdogStatus()
         return JSONObject()
+            .put("wifiWatchdog", JSONObject()
+                .put("enabled", wifi.enabled)
+                .put("targetSsid", wifi.targetSsid ?: JSONObject.NULL)
+                .put("status", wifi.status.name.lowercase(Locale.ROOT))
+                .put("lastConnectedAtMs", wifi.lastConnectedAtMs ?: JSONObject.NULL)
+                .put("lastAttemptAtMs", wifi.lastAttemptAtMs ?: JSONObject.NULL)
+                .put("lastError", wifi.lastError ?: JSONObject.NULL))
             .put("catalog", SoundCatalog.toJsonArray(context))
             .put("activeVoices", activeArr)
             .put("scenes", scenesArr)

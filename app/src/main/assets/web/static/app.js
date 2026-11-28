@@ -19,6 +19,8 @@ let interactingControl = null;
 let evtSrc = null;
 let scheduleNextTimer = null;
 let visibleTab = "pad";
+let wifiWatchdogPending = false;
+let wifiWatchdogRequestError = "";
 const voiceVolumes = new Map();
 
 function queueVoiceVolume(id, volume) {
@@ -70,7 +72,10 @@ async function api(path, body) {
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(path, opts);
-  if (!res.ok) throw new Error(`${path}: ${res.status}`);
+  if (!res.ok) {
+    const failure = await res.json().catch(() => null);
+    throw new Error(failure && failure.error ? failure.error : `${path}: ${res.status}`);
+  }
   const contentType = res.headers.get("content-type") || "";
   const result = await (contentType.includes("application/json") ? res.json() : res.text());
   if (path !== "/api/state") {
@@ -148,8 +153,11 @@ function render() {
     renderSection("schedule", schedule, ["#schedule-list"], renderSchedule);
   }
   if (visibleTab === "library") renderSection("library", state.catalog, ["#library-list"], renderLibrary);
-  if (visibleTab === "settings") renderSection("settings", [state.settings, state.systemVolumeTarget],
-    ["#pane-settings"], renderSettings);
+  if (visibleTab === "settings") {
+    renderSection("settings", [state.settings, state.systemVolumeTarget], ["#pane-settings"], renderSettings);
+    renderSection("wifi-watchdog", [state.wifiWatchdog, wifiWatchdogPending, wifiWatchdogRequestError],
+      [], renderWifiWatchdog);
+  }
 }
 
 function renderSection(name, value, selectors, draw) {
@@ -399,6 +407,29 @@ function renderSettings() {
   }
 }
 
+function renderWifiWatchdog() {
+  const wifi = state.wifiWatchdog || {};
+  const toggle = $("#set-wifi-watchdog");
+  toggle.disabled = wifiWatchdogPending || !state.wifiWatchdog;
+  if (!wifiWatchdogPending) toggle.checked = !!wifi.enabled;
+  $("#wifi-watchdog-details").hidden = !wifi.enabled;
+  $("#wifi-watchdog-target").textContent = wifi.targetSsid || "—";
+  const labels = {
+    disabled: "Disabled", connected: "Connected", disconnected: "Disconnected",
+    reconnecting: "Reconnecting", waiting_to_retry: "Waiting to retry",
+    wifi_off: "Wi-Fi is off", other_network: "Connected to another Wi-Fi network", error: "Error"
+  };
+  $("#wifi-watchdog-status").textContent = labels[wifi.status] || "—";
+  $("#wifi-watchdog-connected").textContent = wifi.lastConnectedAtMs
+    ? new Date(wifi.lastConnectedAtMs).toLocaleString() : "—";
+  $("#wifi-watchdog-attempt").textContent = wifi.lastAttemptAtMs
+    ? new Date(wifi.lastAttemptAtMs).toLocaleString() : "—";
+  const warning = $("#wifi-watchdog-error");
+  const message = wifiWatchdogRequestError || wifi.lastError || "";
+  if (warning.textContent !== message) warning.textContent = message;
+  warning.hidden = !message;
+}
+
 // ---------- helpers ----------
 
 function labelFor(id) {
@@ -533,6 +564,21 @@ function wire() {
   for (const id of ["#set-dnd", "#set-alarms-through-dnd", "#set-autostart", "#set-keep-screen"]) {
     $(id).addEventListener("change", () => saveSettings());
   }
+  $("#set-wifi-watchdog").addEventListener("change", async (e) => {
+    wifiWatchdogPending = true;
+    wifiWatchdogRequestError = "";
+    render();
+    try {
+      const updated = await api("/api/settings", { wifiWatchdogEnabled: e.target.checked });
+      stateRevision++;
+      state.wifiWatchdog = updated.wifiWatchdog;
+    } catch (err) {
+      wifiWatchdogRequestError = err.message;
+    } finally {
+      wifiWatchdogPending = false;
+      render();
+    }
+  });
   $("#set-port").addEventListener("change", () => saveSettings({ port: parseInt($("#set-port").value, 10) }));
   const sv = $("#set-sysvol");
   let svTimer = null;
